@@ -34,6 +34,8 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/gjhan100/IMC-HistoTools"
 Repository = "https://github.com/gjhan100/IMC-HistoTools"
+Issues = "https://github.com/gjhan100/IMC-HistoTools/issues"
+
 
 [tool.setuptools]
 packages = ["IMC_HistoTools"]

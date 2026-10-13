@@ -111,9 +111,15 @@ def virtual_IHC_annotation(image, geojson_path, region_order=None, name_key='nam
 # ============================================================
 
 def Hscore_threshold(marker_image, Np=None, Lp=None, Mp=None, Hp=None,
-                     tissue_mask=None, exclude_zero=False):
+                     tissue_mask=None, exclude_zero=False, stat='median'):
     """
-    根据参考 ROI (Np / Lp / Mp / Hp) 计算各层像素强度的中位值, 作为返回的阈值。
+    根据参考 ROI (Np / Lp / Mp / Hp) 统计像素强度, 作为返回的阈值。
+
+    对每个参考 ROI 分别统计:
+      - mean    : 平均值
+      - median  : 中位值
+      - geomean : 几何平均值 (仅正像素)
+      - all     : mean / median / geomean 三者的平均
 
     Np / Lp / Mp / Hp 分别对应单个或多个设置 ROI 区域 (bool mask 或 mask 列表,
     列表取并集); 可传 ``tissue_mask`` 以仅统计落在组织内的像素。
@@ -127,47 +133,51 @@ def Hscore_threshold(marker_image, Np=None, Lp=None, Mp=None, Hp=None,
     tissue_mask : bool ndarray or None
         组织 mask (True=组织); 提供时各 ROI 会与组织求交。
     exclude_zero : bool
-        是否在计算中位值前排除强度为 0 的像素 (默认 False)。
+        是否在统计前排除强度为 0 的像素 (默认 False)。
+    stat : str, {'mean','median','geomean','all'}
+        选择用于 ``thresholds`` 的统计量 (默认 'median')。
 
     Returns
     -------
     dict
         {
-          'Np' : float or None,   # Np 参考区中位强度
-          'Lp' : float or None,
-          'Mp' : float or None,
-          'Hp' : float or None,
-          'thresholds' : (T1, T2, T3) or None,   # 用于 0/1/2/3 分层的 3 个阈值
+          'Np' : {'mean','median','geomean','all'} 或 None,
+          'Lp' : {...}, 'Mp' : {...}, 'Hp' : {...},
+          'thresholds' : (T1, T2, T3),   # 由 stat 决定, 对应 Lp/Mp/Hp
+          'stat' : str,
         }
-        其中 thresholds = (median(Np), median(Lp), median(Mp))。
     """
+    if stat not in ('mean', 'median', 'geomean', 'all'):
+        raise ValueError(f"stat 必须是 'mean'/'median'/'geomean'/'all', 得到 {stat!r}")
+
     img = np.asarray(marker_image, dtype=np.float32)
     shape = img.shape
 
-    def _median(roi):
+    def _stats(roi):
         m = _as_mask(roi, shape)
         if m is None:
             return None
         if tissue_mask is not None:
             m = m & np.asarray(tissue_mask, dtype=bool)
-        vals = img[m]
+        vals = img[m].astype(np.float64)
         if exclude_zero:
             vals = vals[vals > 0]
         if vals.size == 0:
             return None
-        return float(np.median(vals))
+        mean = float(np.mean(vals))
+        median = float(np.median(vals))
+        pos = vals[vals > 0]
+        geomean = float(np.exp(np.mean(np.log(pos)))) if pos.size else 0.0
+        all_ = (mean + median + geomean) / 3.0
+        return {'mean': mean, 'median': median, 'geomean': geomean, 'all': all_}
 
-    med_Np = _median(Np)
-    med_Lp = _median(Lp)
-    med_Mp = _median(Mp)
-    med_Hp = _median(Hp)
+    stats = {'Np': _stats(Np), 'Lp': _stats(Lp),
+             'Mp': _stats(Mp), 'Hp': _stats(Hp)}
 
-    thresholds = tuple(t for t in (med_Np, med_Lp, med_Mp))
+    thresholds = tuple(stats[k][stat] if stats[k] is not None else None
+                       for k in ('Lp', 'Mp', 'Hp'))
 
-    return {
-        'Np': med_Np,
-        'Lp': med_Lp,
-        'Mp': med_Mp,
-        'Hp': med_Hp,
-        'thresholds': thresholds,
-    }
+    result = dict(stats)
+    result['thresholds'] = thresholds
+    result['stat'] = stat
+    return result

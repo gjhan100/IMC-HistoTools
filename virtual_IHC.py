@@ -64,6 +64,7 @@ def virtual_IHC(Blue_image, Red_image, Brown_image,
                 title='',
                 k1=0.001, k2=0.5, k3=0.0075,
                 blue_gamma=1.0, red_gamma=1.0, brown_gamma=1.0,
+                blue_threshold=0.0, red_threshold=0.0, brown_threshold=0.0,
                 blue_lim=(0, 100),
                 red_lim=(0, 100),
                 brown_lim=(0, 100),
@@ -87,7 +88,7 @@ def virtual_IHC(Blue_image, Red_image, Brown_image,
                 grid_linewidth=0.5,
                 spine_linewidth=1.5,
                 # --- colorbar ---
-                blue_bar=True,
+                blue_bar=False,
                 red_bar=False,
                 brown_bar=False,
                 blue_bar_alpha=1.0,
@@ -122,6 +123,9 @@ def virtual_IHC(Blue_image, Red_image, Brown_image,
         全局吸收系数, 控制各通道整体强度.
     blue_gamma, red_gamma, brown_gamma : float
         各通道 Gamma 校正 (默认 1.0).
+    blue_threshold, red_threshold, brown_threshold : float
+        各通道背景扣除阈值: 强度 < threshold 的像素置 0 (默认 0.0 不扣除).
+        例如 Brown_threshold=0.1 等价于 np.where(Brown_image < 0.1, 0.0, Brown_image).
     sigma : float, 高斯模糊 sigma
     kernel_size : tuple, 高斯核大小
     save_dir : str, 输出目录或完整路径 (.png/.tiff/.pdf/.svg)
@@ -165,12 +169,19 @@ def virtual_IHC(Blue_image, Red_image, Brown_image,
     bar_label_fontweight : str or None
         colorbar 标签粗细; None → bar_tick_fontweight.
     """
+    # ---- 背景扣除 (threshold): 低于阈值的像素置 0 ----
+    Blue_image  = np.where(Blue_image < blue_threshold, 0.0, Blue_image)    if Blue_image  is not None else None
+    Red_image   = np.where(Red_image < red_threshold, 0.0, Red_image)      if Red_image   is not None else None
+    Brown_image = np.where(Brown_image < brown_threshold, 0.0, Brown_image) if Brown_image is not None else None
+
     # ---- gamma 校正 ----
     Blue_image  = _apply_gamma(Blue_image,  blue_gamma)  if Blue_image  is not None else None
     Red_image   = _apply_gamma(Red_image,   red_gamma)   if Red_image   is not None else None
     Brown_image = _apply_gamma(Brown_image, brown_gamma) if Brown_image is not None else None
 
-    # colorbar 用: 从 gamma 校正后的图像取 lim 百分位作为 [0,1] 映射区间
+    # colorbar 用: 从 (阈值扣除 + gamma 校正后) 图像取 lim 百分位作为 [0,1] 映射区间.
+    #   lim=(0, 100) (默认) 时 lo = 最小正像素 (阈值扣除后最小值), hi = 最大正像素,
+    #   即 colorbar 的 0 端 = 阈值扣除后最小像素的颜色, 1 端 = 最大像素的颜色.
     def _get_lo_hi(img, lim):
         if img is None or np.all(img == 0):
             return 0.0, 1.0

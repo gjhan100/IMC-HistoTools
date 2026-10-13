@@ -17,5 +17,8 @@ venv/
 *.csv
 *.tiff
 *.tif
-*.png
 output/
+
+# figures / images (generated outputs) — but keep repo assets
+*.png
+!assets/*.png

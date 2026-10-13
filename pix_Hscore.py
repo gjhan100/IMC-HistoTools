@@ -47,15 +47,24 @@ def _load(img):
 
 
 def _classify(marker_image, thresholds, blur_sigma=None, blur_kernel=None):
-    """阈值分层 (0/1/2/3)。可选高斯模糊。"""
+    """阈值分层 (0/1/2/3)。可选高斯模糊。
+
+    thresholds = (T1, T2, T3) = (Lp, Mp, Hp):
+      0  if data <  T1
+      1  if T1 <= data <  T2
+      2  if T2 <= data <  T3
+      3  if data >= T3
+    """
     data_f = np.asarray(marker_image, dtype=np.float32)
     if blur_kernel is None or blur_sigma in (None, 0):
         data_blur = data_f
     else:
+        if isinstance(blur_kernel, int):
+            blur_kernel = (blur_kernel, blur_kernel)
         data_blur = cv2.GaussianBlur(data_f, blur_kernel, sigmaX=blur_sigma)
-    T1, T2, T3 = thresholds
+    T1, T2, T3 = thresholds  # (Lp, Mp, Hp)
     scores_2d = np.select(
-        [data_blur > T3, data_blur > T2, data_blur > T1],
+        [data_blur >= T3, data_blur >= T2, data_blur >= T1],
         [3, 2, 1], default=0,
     ).astype(np.uint8)
     return scores_2d
@@ -83,8 +92,9 @@ def pix_Hscore_map(marker_image,
                    tissue_annotation=None,
                    tissue_mask=None,
                    thresholds=None,
-                   blur_sigma=None,
-                   blur_kernel=None,
+                   stat='median',
+                   delta=None,
+                   kernel=None,
                    # --- 输出 ---
                    save_dir='.',
                    base_name='pix_Hscore',
@@ -130,8 +140,16 @@ def pix_Hscore_map(marker_image,
     tissue_mask : bool ndarray or None
         组织 mask (True=组织), 用于排除背景信号。
     thresholds : (T1, T2, T3) or None
-        显式分层阈值; None → 由 ``Hscore_threshold_annotation`` 计算。
-    blur_sigma, blur_kernel : 可选高斯模糊 (默认不做)。
+        显式分层阈值, 顺序为 (Lp, Mp, Hp); None → 由
+        ``Hscore_threshold_annotation`` 计算。
+        分类规则: <T1→0, [T1,T2)→1, [T2,T3)→2, ≥T3→3。
+    stat : str, {'mean','median','geomean','all'}
+        选择用于阈值的统计量 (默认 'median')。
+    delta : float or None
+        分类着色图 (map) 显示前的高斯模糊 sigma (默认 None 不模糊)。
+    kernel : int or tuple or None
+        分类着色图 (map) 显示前的高斯模糊核大小 (默认 None)。
+        统计柱状图/CSV 始终使用非高斯 (非模糊) 分类。
     save_dir : str, 输出目录。
     base_name : str, 输出文件前缀。
     map_* : 分类着色图相关样式 / 是否显示 / 保存。
@@ -145,8 +163,10 @@ def pix_Hscore_map(marker_image,
     dict
         {
           'thresholds'  : (T1, T2, T3),
-          'medians'     : {'Np','Lp','Mp','Hp'} 或 None,
-          'scores_2d'   : uint8 ndarray (H, W),
+          'stat'        : 所选统计量 ('mean'/'median'/'geomean'/'all'),
+          'stats'       : Hscore_threshold 返回的完整统计 dict 或 None,
+          'scores_2d'   : 非高斯分类 uint8 ndarray (H, W) (bargraph/CSV 用),
+          'scores_2d_blur' : 高斯模糊分类 uint8 ndarray (H, W) (map 显示用),
           'csv_path'    : str,
           'score_tiff_path' : str,
           'fig_map'     : matplotlib Figure or None,
@@ -159,29 +179,36 @@ def pix_Hscore_map(marker_image,
     os.makedirs(save_dir, exist_ok=True)
 
     # ---- 1) 阈值 ----
-    medians = None
+    stats = None
     if thresholds is None:
         if not Hscore_threshold_annotation:
             raise ValueError(
                 "必须提供 thresholds 或 Hscore_threshold_annotation "
                 "(包含 Np/Lp/Mp/Hp 参考 ROI)。")
-        thr = Hscore_threshold(
+        stats = Hscore_threshold(
             marker_image,
             Np=Hscore_threshold_annotation.get('Np'),
             Lp=Hscore_threshold_annotation.get('Lp'),
             Mp=Hscore_threshold_annotation.get('Mp'),
             Hp=Hscore_threshold_annotation.get('Hp'),
-            tissue_mask=tissue_mask)
-        medians = {k: thr[k] for k in ('Np', 'Lp', 'Mp', 'Hp')}
-        thresholds = thr['thresholds']
+            tissue_mask=tissue_mask,
+            stat=stat)
+        thresholds = stats['thresholds']
 
     thresholds = tuple(thresholds)
     if len(thresholds) != 3 or any(t is None for t in thresholds):
         raise ValueError(f"thresholds 必须为 (T1, T2, T3) 三个非 None 值, 得到 {thresholds}")
 
     # ---- 2) 分类 ----
+    # 非高斯分类: 用于 bargraph 统计与逐像素 CSV
     scores_2d = _classify(marker_image, thresholds,
-                          blur_sigma=blur_sigma, blur_kernel=blur_kernel)
+                          blur_sigma=None, blur_kernel=None)
+    # 高斯模糊分类: 仅用于 map 显示 (delta=sigma, kernel=核大小)
+    if kernel is not None and delta not in (None, 0):
+        scores_2d_blur = _classify(marker_image, thresholds,
+                                   blur_sigma=delta, blur_kernel=kernel)
+    else:
+        scores_2d_blur = scores_2d
 
     # ---- 3) 逐像素分类 CSV + score tiff ----
     csv_path = os.path.join(save_dir, f"{base_name}_pixels.csv")
@@ -219,7 +246,7 @@ def pix_Hscore_map(marker_image,
     if map_show or map_save:
         cmap = ListedColormap(map_cmap) if isinstance(map_cmap, (list, tuple)) else map_cmap
         norm = BoundaryNorm([-1.5, -0.5, 0.5, 1.5, 2.5, 3.5], ncolors=5)
-        disp = scores_2d.astype(np.int8)
+        disp = scores_2d_blur.astype(np.int8)
         if tissue_mask is not None:
             disp[~np.asarray(tissue_mask, dtype=bool)] = -1  # 背景 → 白
 
@@ -287,8 +314,10 @@ def pix_Hscore_map(marker_image,
 
     return {
         'thresholds': thresholds,
-        'medians': medians,
+        'stat': stat,
+        'stats': stats,
         'scores_2d': scores_2d,
+        'scores_2d_blur': scores_2d_blur,
         'csv_path': csv_path,
         'score_tiff_path': score_tiff_path,
         'fig_map': fig_map,
