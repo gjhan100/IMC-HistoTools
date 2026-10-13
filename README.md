@@ -1,7 +1,7 @@
 <p align="center"><img src="https://raw.githubusercontent.com/gjhan100/IMC-HistoTools/main/assets/261013_Github.png" width="700"></p>
 
-[![Python Versions](https://img.shields.io/badge/python-3.8+-brightgreen.svg)](https://pypi.org/project/imc-histotools)
-[![PyPI](https://img.shields.io/pypi/v/imc-histotools.svg?color=brightgreen&style=flat)](https://pypi.org/project/imc-histotools)
+[![Python Versions](https://img.shields.io/badge/python-3.8+-brightgreen.svg)](https://pypi.org/project/IMC-HistoTools)
+[![PyPI](https://img.shields.io/pypi/v/IMC-HistoTools.svg?color=brightgreen&style=flat)](https://pypi.org/project/IMC-HistoTools)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 **IMC-HistoTools** is a digital-pathology toolkit that bridges **imaging mass cytometry (IMC)** and **histopathology**, developed for the Selenium (Se) IMC study. It turns raw IMC channels into brightfield-like virtual IHC images, quantifies marker expression as **pixel-wise H-scores** on Qupath annotations, and renders **virtual multiplex** images from consecutive sections.
@@ -18,9 +18,9 @@
 
 # Install IMC-HistoTools
 
-### Using pip [![PyPI](https://img.shields.io/pypi/v/imc-histotools.svg?color=brightgreen&style=flat)](https://pypi.org/project/imc-histotools)
+### Using pip [![PyPI](https://img.shields.io/pypi/v/IMC-HistoTools.svg?color=brightgreen&style=flat)](https://pypi.org/project/IMC-HistoTools)
 ```console
-pip install imc-histotools
+pip install IMC-HistoTools
 ```
 
 ### From GitHub [![GitHub](https://img.shields.io/badge/github-source-blue.svg)](https://github.com/gjhan100/IMC-HistoTools)
