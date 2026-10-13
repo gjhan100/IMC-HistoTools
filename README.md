@@ -1,4 +1,4 @@
-<p align="center"><img src="https://raw.githubusercontent.com/gjhan100/IMC-HistoTools/main/assets/261013_Github.png" width="700"></p>
+<p align="center"><img src="assets/261013_Github.png" width="700" alt="IMC-HistoTools"></p>
 
 [![Python Versions](https://img.shields.io/badge/python-3.8+-brightgreen.svg)](https://pypi.org/project/IMC-HistoTools)
 [![PyPI](https://img.shields.io/pypi/v/IMC-HistoTools.svg?color=brightgreen&style=flat)](https://pypi.org/project/IMC-HistoTools)
