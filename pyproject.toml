@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "imc-histotools"
+version = "0.1.0"
+description = "Digital pathology analysis tools for the Selenium (Se) IMC paper: virtual IHC rendering, Qupath ROI annotation, and pixel-wise H-score classification."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [
+    { name = "Guojun Han Laboratory @PKU" },
+]
+keywords = [
+    "IMC", "imaging mass cytometry", "digital pathology", "virtual IHC",
+    "H-score", "pixel-wise H-score", "Qupath", "geojson", "selenium",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+]
+dependencies = [
+    "numpy>=1.20",
+    "opencv-python>=4.5",
+    "matplotlib>=3.4",
+    "tifffile>=2021.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/gjhan100/IMC-HistoTools"
+Repository = "https://github.com/gjhan100/IMC-HistoTools"
+
+[tool.setuptools]
+packages = ["IMC_HistoTools"]
+
+[tool.setuptools.package-dir]
+IMC_HistoTools = "."
+
+[tool.setuptools.package-data]
+IMC_HistoTools = ["*.py"]
