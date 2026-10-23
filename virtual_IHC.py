@@ -97,11 +97,18 @@ def virtual_IHC(Blue_image, Red_image, Brown_image,
                 blue_bar_depth=1.0,
                 red_bar_depth=1.0,
                 brown_bar_depth=1.0,
+                bar_from_zero=True,
+                blue_bar_label='Blue Intensity',
+                red_bar_label='Red Intensity',
+                brown_bar_label='Brown Intensity',
                 bar_position='right',
                 bar_pad=0.02,
-                bar_tick_fontsize=9,
+                bar_fraction=0.02453,
+                bar_shrink=0.85,
+                bar_spacing=0.12,
+                bar_tick_fontsize=12,
                 bar_tick_fontweight='normal',
-                bar_label='Normalized Intensity',
+                bar_label=None,
                 bar_label_fontsize=None,
                 bar_label_fontweight=None):
     """
@@ -154,16 +161,30 @@ def virtual_IHC(Blue_image, Red_image, Brown_image,
     spine_linewidth : float, 外边框线宽度 (默认 1.5)
     blue_bar, red_bar, brown_bar : bool
         是否显示各通道的 Normalized Intensity [0,1] colorbar.
+    bar_from_zero : bool
+        colorbar 0 端的映射方式 (默认 True):
+        - True  → intensity = x*hi, 0 端 = 白底 (与图像背景一致);
+        - False → intensity = lo + x*(hi-lo), 0 端 = 最小正值 (旧行为).
+    blue_bar_label, red_bar_label, brown_bar_label : str
+        各通道 colorbar 的标签文字 (默认 'Blue/Red/Brown Intensity').
+    bar_label : str or None
+        统一覆盖所有通道的 colorbar 标签; 非 None 时优先于每通道标签
+        (默认 None → 使用每通道标签).
     bar_position : str, 'left' / 'right' / 'top' / 'bottom'
         colorbar 放置位置.
     bar_pad : float
-        colorbar 与图像的间距 (默认 0.02).
+        首个 colorbar 与图像的间距 (默认 0.02).
+    bar_fraction : float
+        colorbar 宽度 (figure fraction 绝对值, 默认 0.02453).
+        三根 bar (blue/red/brown) 宽度恒等于该值, 不随 figsize 变化.
+    bar_shrink : float
+        colorbar 高度 (占 axes 比例, 默认 0.85).
+    bar_spacing : float
+        多个 colorbar 之间的间距增量 (默认 0.12).
     bar_tick_fontsize : int
         colorbar 刻度字号.
     bar_tick_fontweight : str
         colorbar 刻度粗细.
-    bar_label : str
-        colorbar 标签文字 (默认 'Normalized Intensity').
     bar_label_fontsize : int or None
         colorbar 标签字号; None → bar_tick_fontsize + 8.
     bar_label_fontweight : str or None
@@ -285,11 +306,15 @@ def virtual_IHC(Blue_image, Red_image, Brown_image,
     # ---- colorbar (Normalized Intensity [0,1] per channel) ----
     # x → x^gamma → 映射到 [lo, hi] → Beer-Lambert
     def _make_stain_cmap(absorption, k_val, gamma_val, lo, hi,
-                         bar_alpha=1.0, bar_depth=1.0, n=256):
-        """gamma + lim → Beer-Lambert → 白→最深染色 colormap."""
+                         bar_alpha=1.0, bar_depth=1.0, from_zero=False, n=256):
+        """gamma + lim → Beer-Lambert → 白→最深染色 colormap.
+
+        from_zero=True → intensity 从 0 起 (0 端=白底, 与图像背景一致);
+        from_zero=False → 从 lo 起 (旧行为, 0 端=最小正值).
+        """
         x = np.linspace(0, 1, n)
         x_eff = x ** gamma_val
-        intensity = lo + x_eff * (hi - lo)
+        intensity = x_eff * hi if from_zero else lo + x_eff * (hi - lo)
         absorbance = k_val * bar_depth * np.outer(intensity,
                                       np.array(absorption, dtype=np.float64))
         rgb = np.clip(np.exp(-absorbance), 0.0, 1.0)
@@ -297,9 +322,9 @@ def virtual_IHC(Blue_image, Red_image, Brown_image,
         return LinearSegmentedColormap.from_list('stain', rgba, N=n)
 
     channel_configs = [
-        (blue_bar,  Blue_image,  _make_stain_cmap(BLUE,  k1, blue_gamma,  *_lo_hi['blue'],  blue_bar_alpha,  blue_bar_depth),   blue_name),
-        (red_bar,   Red_image,   _make_stain_cmap(RED,   k2, red_gamma,   *_lo_hi['red'],   red_bar_alpha,   red_bar_depth),    red_name),
-        (brown_bar, Brown_image, _make_stain_cmap(BROWN, k3, brown_gamma, *_lo_hi['brown'], brown_bar_alpha, brown_bar_depth),  brown_name),
+        (blue_bar,  Blue_image,  _make_stain_cmap(BLUE,  k1, blue_gamma,  *_lo_hi['blue'],  blue_bar_alpha,  blue_bar_depth,  bar_from_zero),   blue_bar_label),
+        (red_bar,   Red_image,   _make_stain_cmap(RED,   k2, red_gamma,   *_lo_hi['red'],   red_bar_alpha,   red_bar_depth,   bar_from_zero),   red_bar_label),
+        (brown_bar, Brown_image, _make_stain_cmap(BROWN, k3, brown_gamma, *_lo_hi['brown'], brown_bar_alpha, brown_bar_depth, bar_from_zero),   brown_bar_label),
     ]
 
     # colorbar label 样式: None → 使用默认 (bar_tick_fontsize + 8 / bar_tick_fontweight)
@@ -308,27 +333,68 @@ def virtual_IHC(Blue_image, Red_image, Brown_image,
     if bar_label_fontweight is None:
         bar_label_fontweight = bar_tick_fontweight
 
-    # 累加 pad 偏移, 使多个 bar 不重叠
-    pad_offset = 0.0
-    for show, img, cmap, label in channel_configs:
-        if not show or img is None or np.all(img == 0):
-            continue
+    # ---- 显式排布 colorbar: 相邻间距统一 = bar_spacing (所有相邻对一致) ----
+    # 需要显示的通道 (channel_configs 顺序: blue, red, brown)
+    _visible = [(cmap, (bar_label if bar_label is not None else lbl))
+                for (show, img, cmap, lbl) in channel_configs
+                if show and img is not None and not np.all(img == 0)]
 
-        sm = ScalarMappable(Normalize(vmin=0, vmax=1), cmap=cmap)
-        sm.set_array([])
-
-        cbar = fig.colorbar(sm, ax=ax, location=bar_position,
-                           pad=bar_pad + pad_offset,
-                           fraction=0.035, shrink=0.85)
-        cbar.set_label(bar_label,
-                       fontsize=bar_label_fontsize,
-                       fontweight=bar_label_fontweight)
-        cbar.ax.tick_params(labelsize=bar_tick_fontsize)
-        for t in cbar.ax.get_yticklabels():
-            t.set_fontweight(bar_tick_fontweight)
-        pad_offset += 0.12  # 下一个 bar 向外偏移
-
+    # 先固定主图布局, 再据其位置手动排布 colorbar
     plt.tight_layout()
+
+    if _visible:
+        def _draw_cbar(pos, cmap, lbl):
+            cax = fig.add_axes(pos)
+            sm = ScalarMappable(Normalize(vmin=0, vmax=1), cmap=cmap)
+            sm.set_array([])
+            cbar = fig.colorbar(sm, cax=cax)
+            # 标签: bar_label 非 None 时统一覆盖; 否则用每通道标签
+            cbar.set_label(lbl, fontsize=bar_label_fontsize,
+                           fontweight=bar_label_fontweight)
+            cbar.ax.tick_params(labelsize=bar_tick_fontsize)
+            for t in cbar.ax.get_yticklabels():
+                t.set_fontweight(bar_tick_fontweight)
+
+        ap = ax.get_position()               # 主图位置 (figure fraction)
+        n = len(_visible)
+        # 视觉顺序: channel_configs 靠后的通道更靠近主图 (与既有出图一致)
+        order = list(reversed(_visible))
+
+        if bar_position in ('right', 'left'):
+            bar_w = bar_fraction             # colorbar 宽度 (figure fraction 绝对值)
+            bar_h = bar_shrink * ap.height   # colorbar 高度
+            pad = bar_pad * ap.width         # 主图与第一个 colorbar 间距
+            gap = bar_spacing * ap.width     # 相邻 colorbar 间距 (统一)
+            total = pad + n * bar_w + (n - 1) * gap
+            new_w = max(ap.width - total, 0.05)
+            y0 = ap.y0 + (ap.height - bar_h) / 2.0
+            if bar_position == 'right':
+                ax.set_position([ap.x0, ap.y0, new_w, ap.height])
+                x, step = ap.x0 + new_w + pad, bar_w + gap
+            else:  # left
+                ax.set_position([ap.x0 + total, ap.y0, new_w, ap.height])
+                x, step = ap.x0, -(bar_w + gap)
+            for cmap, lbl in order:
+                _draw_cbar([x, y0, bar_w, bar_h], cmap, lbl)
+                x += step
+        else:                                # top / bottom: 垂直堆叠
+            bar_w = bar_shrink * ap.width
+            bar_h = bar_fraction             # figure fraction 绝对值
+            pad = bar_pad * ap.height
+            gap = bar_spacing * ap.height
+            total = pad + n * bar_h + (n - 1) * gap
+            new_h = max(ap.height - total, 0.05)
+            x0 = ap.x0 + (ap.width - bar_w) / 2.0
+            if bar_position == 'bottom':
+                ax.set_position([ap.x0, ap.y0, ap.width, new_h])
+                y, step = ap.y0 - pad - bar_h, -(bar_h + gap)
+            else:  # top
+                ax.set_position([ap.x0, ap.y0 + total, ap.width, new_h])
+                y, step = ap.y0 + ap.height + pad, (bar_h + gap)
+            for cmap, lbl in order:
+                _draw_cbar([x0, y, bar_w, bar_h], cmap, lbl)
+                y += step
+
     plt.show()
 
     # ---- 保存完整 figure (含 title, colorbar, 标注) ----
