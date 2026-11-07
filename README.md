@@ -13,8 +13,9 @@
 | `virtual_IHC` | Synthesise an IHC / brightfield-like RGB image from IMC channels using the Beer–Lambert absorbance model (per-channel gamma, background threshold, stain colour bar). |
 | `virtual_IHC_ROI` | Same as above but zooms into a local region while **keeping the original pixel coordinates**. |
 | `virtual_IHC_annotation` | Rasterise Qupath `.geojson` polygon annotations into ROI boolean masks. |
-| `Hscore_threshold` | Build classification thresholds from reference ROIs (Negative / Low / Medium / High) using **mean / median / geometric-mean / all**. |
-| `pix_Hscore_map` | Classify every pixel into NP / LP / MP / HP, export a per-pixel CSV, and produce publication figures (classification map + bar chart & table). |
+| `Hscore_threshold` | Build classification thresholds from reference ROIs (Low / Medium / High; Negative optional) using **mean / median / geometric-mean / all**. |
+| `pix_Hscore_plot_map` | Draw a pixel-wise NP / LP / MP / HP classification color map from a marker image and thresholds (optional Gaussian blur for display). |
+| `pix_Hscore_plot_bar` | Draw a per-region pix H-score bar chart plus an NP / LP / MP / HP proportion table. |
 
 # Install IMC-HistoTools
 
@@ -69,42 +70,50 @@ virtual_IHC_ROI(
 <summary><strong>2. Pixel-wise H-score with Qupath annotation</strong></summary>
 
 Load tissue-region and reference-ROI annotations exported from Qupath, calibrate the
-thresholds from the Negative / Low / Medium / High reference ROIs, then classify every
-pixel and export a CSV + figures.
+thresholds from the Low / Medium / High reference ROIs, then classify every pixel and
+plot the classification map and the per-region bar chart + table.
 
 ```python
-from IMC_HistoTools import virtual_IHC_annotation, Hscore_threshold, pix_Hscore_map
+import numpy as np
+from IMC_HistoTools import (virtual_IHC_annotation, Hscore_threshold,
+                            pix_Hscore_plot_map, pix_Hscore_plot_bar)
 
 marker = tifffile.imread("Normalize/ROI_001_Se_crop_normal.tiff").astype(np.float32)
 tissue = tifffile.imread("Mask/mask_crop.tiff") > 0
 
 # 1) tissue-region annotations (Normal mucosa / Tumor center / Invasive front / ...)
-ann = virtual_IHC_annotation(marker, "tissue_regions.geojson")
+ann = virtual_IHC_annotation(marker, "tissue_regions.geojson", regions=None)
 
-# 2) reference ROIs (Negative / Low / Medium / High) for threshold calibration
-ref = virtual_IHC_annotation(marker, "reference_ROIs.geojson",
-                             region_order=["Negative", "Low", "Medium", "High"])
+# 2) reference ROIs (Low / Medium / High) for threshold calibration
+ref = virtual_IHC_annotation(marker, "reference_ROIs.geojson")   # default: Low/Medium/High
 
 # 3) thresholds from the reference ROIs  (stat: 'mean'/'median'/'geomean'/'all')
 thr = Hscore_threshold(
     marker,
-    Np=ref["masks"]["Negative"], Lp=ref["masks"]["Low"],
-    Mp=ref["masks"]["Medium"],   Hp=ref["masks"]["High"],
+    Lp=ref["masks"]["Low"], Mp=ref["masks"]["Medium"], Hp=ref["masks"]["High"],
     tissue_mask=tissue, stat="median",
 )
 print(thr["thresholds"])          # (Lp, Mp, Hp)
 
-# 4) per-pixel H-score map + CSV + bar chart / table
-res = pix_Hscore_map(
-    marker,
-    Hscore_threshold_annotation=ref["masks"],   # Lp / Mp / Hp reference ROIs
-    tissue_annotation=ann["masks"],             # non-empty -> bar chart + table
-    tissue_mask=tissue,
-    stat="median",
-    delta=2, kernel=(5, 5),                     # Gaussian blur for the map display only
-    save_dir="out/",
-)
-res["csv_path"]        # per-pixel classification: x, y, intensity, score, category
+# 4) pixel-wise classification
+T1, T2, T3 = thr["thresholds"]
+scores = np.select([marker >= T3, marker >= T2, marker >= T1], [3, 2, 1], default=0).astype(np.uint8)
+
+def region_pix_hscore(mask):
+    sc = scores[mask]; total = int(sc.size)
+    counts = {k: int((sc == k).sum()) for k in (0, 1, 2, 3)}
+    pix_h = 100.0 * (3*counts[3] + 2*counts[2] + counts[1]) / total if total else 0.0
+    percents = {k: (100.0*v/total if total else 0.0) for k, v in counts.items()}
+    return {"pix_h": pix_h, "counts": counts, "percents": percents,
+            "total": total, "valid_px": int(mask.sum())}
+
+results = {n: region_pix_hscore(ann["masks"][n] & tissue) for n in ann["names"]}
+
+# 5) figures
+fig_map = pix_Hscore_plot_map(marker, thr["thresholds"], tissue_mask=tissue,
+                              blur_sigma=2, blur_kernel=(5, 5),
+                              save_path="out/pixH_map.png")
+fig_bar = pix_Hscore_plot_bar(results, save_path="out/pixH_bar.png")
 ```
 
 Classification: `intensity < Lp` → 0 (NP), `[Lp, Mp)` → 1 (LP), `[Mp, Hp)` → 2 (MP),

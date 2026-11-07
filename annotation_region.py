@@ -1,13 +1,13 @@
 """
-annotation_region.py — Qupath 圈画 ROI 与 H-score 阈值模块 (IMC-HistoTools)
+annotation_region.py — Qupath ROI annotation and H-score thresholding (IMC-HistoTools)
 
-提供:
-  * ``virtual_IHC_annotation`` : 读取 Qupath geojson 圈画文件 → 栅格化为 ROI mask
-  * ``Hscore_threshold``       : 根据参考 ROI (Np / Lp / Mp / Hp) 计算各层
-                                 像素中位值, 作为 pixel-wise H-score 分层阈值
+Provides:
+  * ``virtual_IHC_annotation`` : read a Qupath geojson annotation file -> rasterize into ROI masks
+  * ``Hscore_threshold``       : compute per-level pixel statistics (Np / Lp / Mp / Hp) from
+                                 reference ROIs and use them as pixel-wise H-score thresholds
 
-对应 2610/261003_Pix_Hscore_histopathology.ipynb 中的 geojson → mask 逻辑,
-并扩展为可直接复用的包函数。
+Corresponds to the geojson -> mask logic in 2610/261003_Pix_Hscore_histopathology.ipynb,
+extended into a directly reusable package function.
 """
 
 import json
@@ -22,7 +22,7 @@ import cv2
 # ============================================================
 
 def _as_mask(roi, shape):
-    """把「单个 mask 或 mask 列表」归一化为一个 bool ndarray (列表取并集)."""
+    """Normalize a single mask or a list of masks into one bool ndarray (union for lists)."""
     if roi is None:
         return None
     if isinstance(roi, (list, tuple)):
@@ -36,34 +36,42 @@ def _as_mask(roi, shape):
 
 
 # ============================================================
-# 1. Qupath geojson → ROI mask
+# 1. Qupath geojson -> ROI mask
 # ============================================================
 
-def virtual_IHC_annotation(image, geojson_path, region_order=None, name_key='name'):
-    """
-    读取 Qupath geojson 圈画文件, 栅格化为 ROI 区域的布尔 mask。
+DEFAULT_REGIONS = ('Low', 'Medium', 'High')
 
-    仅取每个 polygon 的外环 (第一个坐标环), 用 ``cv2.fillPoly`` 填充;
-    支持 Polygon 与 MultiPolygon。
+
+def virtual_IHC_annotation(image, geojson_path, region_order=None, name_key='name',
+                           regions=DEFAULT_REGIONS):
+    """
+    Read a Qupath geojson annotation file and rasterize the ROIs into boolean masks.
+
+    Only the exterior ring of each polygon (the first coordinate ring) is used and
+    filled with ``cv2.fillPoly``; both Polygon and MultiPolygon are supported.
 
     Parameters
     ----------
-    image : 2D ndarray 或 (H, W) tuple
-        用于确定栅格尺寸 H, W (通常传入对应的 virtual IHC / marker 图像)。
+    image : 2D ndarray or (H, W) tuple
+        Used to determine the raster size H, W (usually the corresponding
+        virtual IHC / marker image).
     geojson_path : str or Path
-        Qupath 导出的 .geojson 文件路径。
+        Path to the Qupath-exported .geojson file.
     region_order : list of str or None
-        返回结果的 region 顺序; None → 按 geojson 中出现顺序去重。
+        Order of regions in the returned result; None -> follow the ``regions`` /
+        geojson order (deduplicated).
     name_key : str
-        feature['properties'] 中用于区分区域名称的键 (默认 'name')。
+        Key in feature['properties'] used to distinguish region names (default 'name').
+    regions : sequence of str or None
+        Only read regions with these names (default Low/Medium/High); None -> read all.
 
     Returns
     -------
     dict
         {
-          'polys' : {name: [xy ndarray (N,2), ...]},   # 每个区域的外环顶点 (x, y)
-          'masks' : {name: bool ndarray (H, W)},       # 每个区域的栅格 mask
-          'names' : [按顺序的 region 名],
+          'polys' : {name: [xy ndarray (N,2), ...]},   # exterior ring vertices (x, y) per region
+          'masks' : {name: bool ndarray (H, W)},       # rasterized mask per region
+          'names' : [region names in order],
         }
     """
     image = np.asarray(image)
@@ -78,18 +86,23 @@ def virtual_IHC_annotation(image, geojson_path, region_order=None, name_key='nam
     region_polys = {}              # name -> [exterior xy array, ...]
     for feat in gj['features']:
         name = feat['properties'].get(name_key, 'unknown')
+        if regions is not None and name not in regions:
+            continue
         geom = feat['geometry']
         if geom['type'] == 'MultiPolygon':
             polys = geom['coordinates']
         else:
             polys = [geom['coordinates']]
         for poly in polys:
-            # 外环 (x, y)
+            # exterior ring (x, y)
             region_polys.setdefault(name, []).append(
                 np.asarray(poly[0], dtype=np.float64))
 
     if region_order is None:
-        region_order = list(region_polys.keys())
+        region_order = ([r for r in regions if r in region_polys]
+                        if regions is not None else list(region_polys.keys()))
+    else:
+        region_order = [r for r in region_order if r in region_polys]
 
     region_masks = {}
     for name in region_order:
@@ -107,48 +120,49 @@ def virtual_IHC_annotation(image, geojson_path, region_order=None, name_key='nam
 
 
 # ============================================================
-# 2. 参考 ROI → H-score 分层阈值 (中位值)
+# 2. reference ROI -> H-score level thresholds (median)
 # ============================================================
 
 def Hscore_threshold(marker_image, Np=None, Lp=None, Mp=None, Hp=None,
                      tissue_mask=None, exclude_zero=False, stat='median'):
     """
-    根据参考 ROI (Np / Lp / Mp / Hp) 统计像素强度, 作为返回的阈值。
+    Compute per-ROI intensity statistics (Np / Lp / Mp / Hp) for use as thresholds.
 
-    对每个参考 ROI 分别统计:
-      - mean    : 平均值
-      - median  : 中位值
-      - geomean : 几何平均值 (仅正像素)
-      - all     : mean / median / geomean 三者的平均
+    For each reference ROI, the following statistics are computed:
+      - mean    : arithmetic mean
+      - median  : median
+      - geomean : geometric mean (positive pixels only)
+      - all     : mean of mean / median / geomean
 
-    Np / Lp / Mp / Hp 分别对应单个或多个设置 ROI 区域 (bool mask 或 mask 列表,
-    列表取并集); 可传 ``tissue_mask`` 以仅统计落在组织内的像素。
+    Np / Lp / Mp / Hp correspond to one or more reference ROI regions (a bool mask
+    or a list of masks; lists are unioned); ``tissue_mask`` can be supplied to count
+    only pixels inside the tissue.
 
     Parameters
     ----------
     marker_image : 2D ndarray
-        marker 强度图像 (通常为背景扣除后的图像)。
-    Np, Lp, Mp, Hp : bool ndarray 或 list of bool ndarray, 或 None
-        负 / 低 / 中 / 高 表达的参考 ROI 区域。
+        Marker intensity image (usually background-subtracted).
+    Np, Lp, Mp, Hp : bool ndarray or list of bool ndarray, or None
+        Reference ROI regions for negative / low / medium / high expression.
     tissue_mask : bool ndarray or None
-        组织 mask (True=组织); 提供时各 ROI 会与组织求交。
+        Tissue mask (True = tissue); when provided, each ROI is intersected with it.
     exclude_zero : bool
-        是否在统计前排除强度为 0 的像素 (默认 False)。
+        Whether to exclude zero-intensity pixels before computing statistics (default False).
     stat : str, {'mean','median','geomean','all'}
-        选择用于 ``thresholds`` 的统计量 (默认 'median')。
+        Statistic used for ``thresholds`` (default 'median').
 
     Returns
     -------
     dict
         {
-          'Np' : {'mean','median','geomean','all'} 或 None,
+          'Np' : {'mean','median','geomean','all'} or None,
           'Lp' : {...}, 'Mp' : {...}, 'Hp' : {...},
-          'thresholds' : (T1, T2, T3),   # 由 stat 决定, 对应 Lp/Mp/Hp
+          'thresholds' : (T1, T2, T3),   # determined by stat, corresponding to Lp/Mp/Hp
           'stat' : str,
         }
     """
     if stat not in ('mean', 'median', 'geomean', 'all'):
-        raise ValueError(f"stat 必须是 'mean'/'median'/'geomean'/'all', 得到 {stat!r}")
+        raise ValueError(f"stat must be 'mean'/'median'/'geomean'/'all', got {stat!r}")
 
     img = np.asarray(marker_image, dtype=np.float32)
     shape = img.shape

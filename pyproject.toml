@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "IMC-HistoTools"
-version = "0.1.1"
+version = "0.2.0"
 description = "Digital pathology analysis tools for the Selenium (Se) IMC paper: virtual IHC rendering, Qupath ROI annotation, and pixel-wise H-score classification."
 readme = "README.md"
 requires-python = ">=3.8"
