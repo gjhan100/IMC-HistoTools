@@ -4,7 +4,7 @@
 [![PyPI](https://img.shields.io/pypi/v/IMC-HistoTools.svg?color=brightgreen&style=flat)](https://pypi.org/project/IMC-HistoTools)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**IMC-HistoTools** is a digital-pathology toolkit that bridges **imaging mass cytometry (IMC)** and **histopathology**, developed for the Selenium (Se) IMC study. It turns raw IMC channels into brightfield-like virtual IHC images, quantifies marker expression as **pixel-wise H-scores** on Qupath annotations, and renders **virtual multiplex** images from consecutive sections.
+**IMC-HistoTools** is a digital-pathology toolkit that bridges **imaging mass cytometry (IMC)** and **histopathology**, developed for the Selenium (Se) IMC study. It turns raw IMC channels into brightfield-like virtual IHC images, quantifies marker expression as **pixel-wise H-scores** on Qupath annotations, and renders **three-color virtual IHC** images from registered channels.
 
 # Functionality
 
@@ -37,29 +37,56 @@ pip install -e .
 <summary><strong>1. Virtual IHC from IMC raw tiff</strong></summary>
 
 Render a brightfield-like IHC image from raw (or [0,1]-normalised) IMC channels.
-`Blue` is typically the nuclear marker (DNA); `Brown`/`Red` are membrane / lineage markers.
+`Blue` is typically the nuclear marker (DNA); `Brown` / `Red` are membrane / lineage markers.
+The example below renders the DNA intercalator channels (¹⁹¹Ir + ¹⁹³Ir) as a blue virtual IHC image.
 
 ```python
 import numpy as np
 import tifffile
+from pathlib import Path
 from IMC_HistoTools import virtual_IHC, virtual_IHC_ROI
 
 # read IMC channels
-dna = tifffile.imread("ROI_001_193Ir-DNA_cor.tiff").astype(np.float32)   # nuclear
-se  = tifffile.imread("ROI_001_Se-Ecadherin_cor.tiff").astype(np.float32) # membrane
+DNA_CRC1 = tifffile.imread("ROI_001_191Ir-DNA191_Ir191_crop_normal.tiff").astype(np.float32)
+DNA_CRC2 = tifffile.imread("ROI_001_193Ir-DNA193_Ir193_crop_normal.tiff").astype(np.float32)
+Se_Ecadherin = tifffile.imread("ROI_001_Se_crop_normal.tiff").astype(np.float32)  # for the axis extent
+out_dir = Path("out")
 
-# full-image virtual IHC  (Blue = DNA, Brown = E-cadherin-Se)
-virtual_IHC(
-    Blue_image=dna, Red_image=None, Brown_image=se,
-    blue_name="DNA", brown_name="E-cadherin (Se)",
-    brown_threshold=0.1,          # background removal (< threshold -> 0)
-    brown_bar=True,               # show stain colour bar
-    save_dir="out/virtual_IHC.png",
-)
+# virtual IHC from DNA-Intercalator-Ir
+fig = virtual_IHC(Blue_image=DNA_CRC1 + DNA_CRC2,
+                  Red_image=None,
+                  Brown_image=None,
+                  blue_name="DNA", brown_name="E-cadherin (Se)",
+                  brown_threshold=0.1,
+                  title="DNA-Intercalator-Ir",
+                  sigma=1, kernel_size=(3, 3),
+                  k1=0.25, k3=0.5,
+                  figsize=(24, 12),
+                  grid=True,
+                  grid_linewidth=2.0,
+                  spine_linewidth=3.0,
+                  tick_fontsize=28,
+                  axis_label_fontsize=40,
+                  bar_tick_fontsize=32,
+                  axis_label_fontweight='bold',
+                  tick_fontweight='normal',
+                  bar_tick_fontweight='normal',
+                  title_fontsize=50,
+                  title_fontweight='bold',
+                  tick_step=500, xlim=(0, Se_Ecadherin.shape[1]), ylim=(0, Se_Ecadherin.shape[0]),
+                  blue_bar=True,
+                  save_dir=str(out_dir / "CRC_virtual_IHC.png"),
+                  Save_raw=True,
+                  save_dpi=300)
+```
 
-# local region, keeping original pixel coordinates
+<p align="center"><img src="assets/README_virtual_IHC_DNA_Ir.png" width="700" alt="Virtual IHC — DNA-Intercalator-Ir"></p>
+
+A local region can be rendered while keeping the original pixel coordinates with `virtual_IHC_ROI`:
+
+```python
 virtual_IHC_ROI(
-    Blue_image=dna, Red_image=None, Brown_image=se,
+    Blue_image=DNA_CRC1 + DNA_CRC2, Red_image=None, Brown_image=None,
     X0=2250, X1=3000, Y0=1250, Y1=2000, TICK=250,
     save_dir="out/virtual_IHC_ROI.png",
 )
@@ -75,9 +102,12 @@ plot the classification map and the per-region bar chart + table.
 
 ```python
 import numpy as np
+import tifffile
+from pathlib import Path
 from IMC_HistoTools import (virtual_IHC_annotation, Hscore_threshold,
-                            pix_Hscore_plot_map, pix_Hscore_plot_bar)
+                            pix_Hscore_plot_map, pix_Hscore_plot_bar, BAR_ORDER)
 
+out_dir = Path("out")
 marker = tifffile.imread("Normalize/ROI_001_Se_crop_normal.tiff").astype(np.float32)
 tissue = tifffile.imread("Mask/mask_crop.tiff") > 0
 
@@ -109,35 +139,103 @@ def region_pix_hscore(mask):
 
 results = {n: region_pix_hscore(ann["masks"][n] & tissue) for n in ann["names"]}
 
-# 5) figures
-fig_map = pix_Hscore_plot_map(marker, thr["thresholds"], tissue_mask=tissue,
-                              blur_sigma=2, blur_kernel=(5, 5),
-                              save_path="out/pixH_map.png")
-fig_bar = pix_Hscore_plot_bar(results, save_path="out/pixH_bar.png")
+# 5) classification map
+fig_map = pix_Hscore_plot_map(
+    marker,
+    thr["thresholds"],              # (T1, T2, T3) = (Lp, Mp, Hp)
+    tissue_mask=tissue,             # set background to white
+    blur_sigma=5,
+    blur_kernel=(7, 7),
+    grid=True,
+    colorbar=False,
+    grid_linewidth=2.0,
+    spine_linewidth=3.0,
+    figsize=(18, 12),
+    xlabel="5μm / pixel",
+    ylabel="5μm / pixel",
+    save_path=str(out_dir / "CRC_T2_map_example.png"),
+    dpi=200,
+    show=True,
+)
+
+# 6) bar chart + proportion table
+fig_bar = pix_Hscore_plot_bar(
+    results,
+    bar_order=BAR_ORDER,
+    figsize=(6, 6),
+    bar_title="pix H-scores", bar_title_pad=10,
+    title_fontsize=20, title_fontweight="bold",
+    tick_fontsize=16, tick_fontweight="bold",
+    value_fontsize=22,
+    table_fontsize=17,
+    overall_fontsize=12,
+    overall_hscore=None,             # pass the overall tissue pix H-score to draw a reference line
+    save_path=str(out_dir / "CRC_T2_bar_example.png"),
+    dpi=200,
+    show=True,
+)
 ```
+
+<p align="center"><img src="assets/README_pixH_map.png" width="620" alt="Pixel-wise H-score classification map"></p>
+<p align="center"><img src="assets/README_pixH_bar.png" width="420" alt="Per-region pix H-score bar chart and proportion table"></p>
 
 Classification: `intensity < Lp` → 0 (NP), `[Lp, Mp)` → 1 (LP), `[Mp, Hp)` → 2 (MP),
 `>= Hp` → 3 (HP). The bar-chart statistics always use the **non-blurred** classification.
 </details>
 
 <details>
-<summary><strong>3. Virtual multiplexing from consecutive sections</strong></summary>
+<summary><strong>3. Three-color virtual IHC</strong></summary>
 
-Feed registered channels from consecutive sections into the three colour channels of
-`virtual_IHC` to obtain a single virtual-multiplex image (blue / red / brown).
+Combine three registered channels — DNA (blue), a lineage marker (red), and a membrane marker (brown) — into a single three-color virtual IHC image. The example renders Keratin 8/18 (brown), αSMA-Se (red), and DNA-intercalator (blue) from an HCC section, as introduced in Tutorial 3.
 
 ```python
+import numpy as np
+import tifffile
+from pathlib import Path
 from IMC_HistoTools import virtual_IHC
 
-virtual_IHC(
-    Blue_image=dna,     # section A — DNA        (nuclear,    blue)
-    Red_image=cd45,     # section B — CD45       (red)
-    Brown_image=ecad,   # section C — E-cadherin (membrane,   brown)
-    blue_name="DNA", red_name="CD45", brown_name="E-cadherin",
-    blue_bar=True, red_bar=True, brown_bar=True,
-    save_dir="out/virtual_multiplex.png",
-)
+input_dir = Path("05_background_correction")
+output_dir = Path("06_virtual_IHC")
+αSMA = tifffile.imread(input_dir / "ROI_001_Se_aSMA_cor.tiff").astype(np.float32)
+DNA_1 = tifffile.imread(input_dir / "ROI_001_191Ir-DNA_Ir191_cor.tiff").astype(np.float32)
+DNA_2 = tifffile.imread(input_dir / "ROI_001_193Ir-DNA_Ir193_cor.tiff").astype(np.float32)
+marker = tifffile.imread(input_dir / "ROI_001_174Yb-Keratin8-18_Yb174_cor.tiff").astype(np.float32)
+
+# ---- Virtual IHC (HCC) ----
+fig = virtual_IHC(Blue_image=DNA_1+DNA_2, Red_image=αSMA, Brown_image=marker,
+                  blue_name="DNA", brown_name="Keratin8-18", red_name="αSMA",
+                  red_threshold=0.1,
+                  brown_threshold=0,
+                  title="Keratin 8/18-174Yb (brown) αSMA-Se (red)",
+                  xlabel='5μm / pixel',
+                  ylabel='',
+                  sigma=1, kernel_size=(3, 3),
+                  k1=0.15, k2=0.15, k3=0.25,
+                  figsize=(12, 6.8),
+                  tick_step=500, xlim=(0, αSMA.shape[1]), ylim=(0, αSMA.shape[0]),
+                  tick_fontsize=14,
+                  tick_fontweight='normal',
+                  axis_label_fontsize=18,
+                  axis_label_fontweight='bold',
+                  title_fontsize=28,
+                  title_fontweight='bold',
+                  title_pad=14,
+                  bar_pad=0.01,
+                  brown_bar=True,
+                  bar_spacing=0.15,
+                  red_bar_depth=1.0,
+                  brown_bar_label='Keratin 8/18',
+                  bar_fraction=0.02453,
+                  bar_shrink=0.93,
+                  bar_label_fontsize=28,
+                  bar_label_fontweight='bold',
+                  bar_tick_fontsize=14,
+                  save_dir=str(output_dir / "αSMA_174Yb-Keratin8-18.png"),
+                  Save_raw=True,
+                  save_dpi=300)
 ```
+
+<p align="center"><img src="assets/README_three_color_virtual_IHC.png" width="720" alt="Three-color virtual IHC (Keratin 8/18, αSMA, DNA)"></p>
 </details>
 
 # Citation
